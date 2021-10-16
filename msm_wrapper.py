@@ -10,10 +10,13 @@ from http.server import SimpleHTTPRequestHandler
 from base64 import b64encode
 import subprocess
 import socketserver
+from typing import Tuple, Union
+import server_pinger
 
 AUTH_KEY = ""
 CONFIG = None
 SERVER = None
+
 
 def read_config(path="config.txt"):
     config = {}
@@ -47,6 +50,7 @@ def read_config(path="config.txt"):
     config['permitted-resources'] = paths
     return config
 
+
 def run_command(command_args):
     try:
         process = subprocess.Popen(command_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -56,14 +60,33 @@ def run_command(command_args):
     except Exception as e:
         logging.exception(f"Could not execute command {command_args}!")
 
-def get_server_status():
+
+def get_server_info() -> Tuple[bool, Union[server_pinger.Server, None]]:
     result = run_command(["msm", SERVER, "status"])
-    if not result:
-        return False
-    return "is running" in result
+    if not result:  # MSM not running
+        return (False, None)
+    if "is running" not in result: # MSM says it's down
+        return (False, None)
+
+    # MSM says the server is running so grab the info from the pinger.
+    # note: The server may refuse the connection when initializing. This is flagged in the returned object
+    return True, server_pinger.ping("127.0.0.1")
+
+
+def get_server_status(info: Tuple[bool, Union[server_pinger.Server, None]]) -> str:
+    online, server = info
+    if not online:
+        return "offline"
+    if online and server.accepting_connections:
+        return "online"
+    else:
+        return "initializing"
+
+
 
 class AddressReuseServer(socketserver.TCPServer):
     allow_reuse_address = True
+
 
 class AuthHandler(SimpleHTTPRequestHandler):
     ''' Main class to present webpages and authentication. '''
@@ -71,12 +94,19 @@ class AuthHandler(SimpleHTTPRequestHandler):
         return bytes(f"<html><head><h1>{title}</h1></head><body>{error}</h1></body></h1ml>", "utf-8")
 
     def bind_template_values(self):
-        status = "ONLINE" if get_server_status() else "OFFLINE"
+        online, server = get_server_info()
+        status = get_server_status((online, server))
+
+        players = server.players.online if online and server.accepting_connections else 0
+        max_players = server.players.max if online and server.accepting_connections else 0
+
         domain_status = "NO_SYNC"
         IP = urllib.request.urlopen('https://ident.me').read().decode('utf8')
         values = template.replace("{{IP}}", IP).replace("{{DOMAIN}}", CONFIG["domain"])
         values = values.replace("{{STATUS}}", status).replace("{{DOMAIN_STATUS}}", domain_status)
+        values = values.replace("{{PLAYERS}}", str(players)).replace("{{MAX_PLAYERS}}", str(max_players))
         return values
+
     def do_HEAD(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
