@@ -1,0 +1,14 @@
+[Unit]
+Description=MSM Web Wrapper service
+
+[Service]
+Type=simple
+User={{USER_TO_RUN_AS}}
+Restart=always
+ExecStart=/usr/bin/python3 {{INSTALL_PATH}}/msm_wrapper.py
+WorkingDirectory={{INSTALL_PATH}}
+StandardOutput=file:{{LOG_PATH}}/log.txt
+StandardError=file:{{LOG_PATH}}/errors.txt
+
+[Install]
+WantedBy=multi-user.target

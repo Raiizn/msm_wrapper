@@ -1,0 +1,9 @@
+# MSM Wrapper Management
+port=8080  # Port to listen to
+msm-server=your-server-here
+main-template=template.html
+admin-template=admin-template.html
+permitted-resources=disclaimer.html
+admin-name=admin-name
+admin-pass=admin-pass
+domain=sample.domain.com
