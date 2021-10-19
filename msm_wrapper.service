@@ -5,6 +5,7 @@ Description=MSM Web Wrapper service
 Type=simple
 User={{USER_TO_RUN_AS}}
 Restart=always
+Environment="TERM=linux"
 ExecStart=/usr/bin/python3 {{INSTALL_PATH}}/msm_wrapper.py
 WorkingDirectory={{INSTALL_PATH}}
 StandardOutput=file:{{LOG_PATH}}/log.txt
