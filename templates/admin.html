@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+  <!-- Basic Page Needs
+  –––––––––––––––––––––––––––––––––––––––––––––––––– -->
+  <meta charset="utf-8">
+  <title>Administration</title>
+  <meta name="description" content="">
+  <meta name="author" content="">
+
+  <!-- Mobile Specific Metas
+  –––––––––––––––––––––––––––––––––––––––––––––––––– -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- FONT
+  –––––––––––––––––––––––––––––––––––––––––––––––––– -->
+  <link href="//fonts.googleapis.com/css?family=Raleway:400,300,600" rel="stylesheet" type="text/css">
+
+  <!-- CSS
+  –––––––––––––––––––––––––––––––––––––––––––––––––– -->
+  <link rel="stylesheet" href="templates/normalize.css">
+  <link rel="stylesheet" href="templates/skeleton.css">
+  <link rel="stylesheet" href="normalize.css">
+  <link rel="stylesheet" href="skeleton.css">
+  <!-- Favicon
+  –––––––––––––––––––––––––––––––––––––––––––––––––– -->
+  <link rel="icon" type="image/png" href="images/favicon.png">
+	<style type='text/css'>
+	/* Tooltip container */
+	.tooltip {
+		position: relative;
+		display: inline-block;
+		border-bottom: 1px dotted black; /* If you want dots under the hoverable text */
+	}
+
+	/* Tooltip text */
+	.tooltip .tooltiptext {
+		visibility: hidden;
+		background-color: black;
+		color: #fff;
+		width: 300px;
+		text-align: center;
+		padding: 5px 0;
+		border-radius: 6px;
+	  bottom: 100%;
+		left: 50%;
+		margin-left: -150px;
+		position: absolute;
+		padding: 2px;
+		z-index: 1;
+	}
+
+	/* Show the tooltip text when you mouse over the tooltip container */
+	.tooltip:hover .tooltiptext {
+		visibility: visible;
+	}
+
+	button disabled{
+	    background-color: gray !important;
+    }
+	#console{
+		border: 1px solid gray;
+		padding: 3px;
+		border-radius: 1em;
+		width: 80%;
+		height: 400px;
+	}
+	
+	#alert_container{
+		min-height: 28px;
+		padding: 12px;
+		border-radius: 1em;
+		font-size: 18px;
+		margin-top: 1em;
+
+	}
+	
+	.alert_ok{
+		background-color: #cbffc2;
+		color: green;
+		border: 1px solid green;
+	}
+	.alert_error{
+		background-color: #ffe8e0;
+		color: red;
+		border: 1px solid red;
+	}
+	.alert_warn{
+		background-color:#fffce3;
+		color: orange;
+		border: 1px solid orange;
+	}
+
+	</style>
+	
+	<script type="text/javascript">
+		var DOING_REQ = false;
+		function start_req(){
+			DOING_REQ = true;
+			set_buttons_enabled(false);
+		}
+		
+		function end_req(){
+			DOING_REQ = false;
+			set_buttons_enabled(true);
+		}
+		
+		function gE(id){
+			return document.getElementById(id);
+		}
+		
+		function notify(type, text){
+			var container = gE("alert_container");
+			if(type == "hide"){
+				container.classList.clear();
+				container.innerHTML = "";
+				return;
+			}
+			container.classList.add("alert_"+type);
+			container.innerHTML = text;
+		}
+		
+	  function set_buttons_enabled(enabled){
+			var buttons = ["start", "stop", "restart", "kill", "status"]
+			for(var i = 0; i<buttons.length; i+=1)
+				gE(buttons[i]).enabled = enabled;
+		}
+		
+		function start_server(){
+			if(DOING_REQ)
+				return;
+			start_req();
+			var xhttp = new XMLHttpRequest();
+			xhttp.onload = function(){
+				notify("ok", this.responseText);
+				end_req();
+			}
+			xhttp.open("GET", "/admin/api/start", true);
+			xhttp.send();
+		}
+
+		function stop_server(){
+		    if(DOING_REQ)
+				return;
+			start_req();
+			var xhttp = new XMLHttpRequest();
+			xhttp.onload = function(){
+				notify("ok", this.responseText);
+				end_req();
+			}
+			xhttp.open("GET", "/admin/api/stop", true);
+			xhttp.send();
+		}
+
+		function restart_server(){
+		    if(DOING_REQ)
+				return;
+			start_req();
+			var xhttp = new XMLHttpRequest();
+			xhttp.onload = function(){
+				notify("ok", this.responseText);
+				end_req();
+			}
+			xhttp.open("GET", "/admin/api/restart", true);
+			xhttp.send();
+		}
+
+		function kill_server(){
+		    if(DOING_REQ)
+				return;
+			start_req();
+			var xhttp = new XMLHttpRequest();
+			xhttp.onload = function(){
+				notify("ok", this.responseText);
+				end_req();
+			}
+			xhttp.open("GET", "/admin/api/kill", true);
+			xhttp.send();
+		}
+	</script>
+</head>
+<body>
+
+  <!-- Primary Page Layout
+  –––––––––––––––––––––––––––––––––––––––––––––––––– -->
+  <div class="container">
+		<div id="alert_container"></div>
+    <div style="margin-top: 1em;">
+        <h4>Server Administration</h4>
+				<p>Server administration page for {{msm-server}}.</p>
+				<p>Status: {{STATUS}} &nbsp; &nbsp; <button id="status">Refresh</button></p>
+				<button id="start" class="button-primary" onclick="start_server()">Start Server</button>
+				<button id="stop" class="button-primary" onclick="stop_server()">Stop Server</button>
+				<button id="restart" class="button-primary" onclick="restart_server()">Restart Server</button>
+				<button id="kill" class="button-primary tooltip" onclick="kill_server()">Kill
+					<span class="tooltiptext">This should be a last resort!</span>
+				</button>
+				<hr/>
+				<h5>Console</h5>
+				<div id="console"></div>
+
+    </div>
+  </div>
+
+<!-- End Document
+  –––––––––––––––––––––––––––––––––––––––––––––––––– -->
+</body>
+</html>

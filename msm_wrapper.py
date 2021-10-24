@@ -9,25 +9,24 @@ import logging
 import re
 import sys
 import urllib.request
+from urllib.parse import urlparse, parse_qs
 from datetime import datetime
-from http.server import SimpleHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler, BaseHTTPRequestHandler
 from base64 import b64encode
 import subprocess
 import socketserver
 from typing import Tuple, Union
-
 import unicodedata
-
-import server_pinger
+from lib import server_pinger
 from threading import Thread
 from queue import Queue, Empty
+from lib.mapped_queue import MappedQueue
 
 IP = ""
 AUTH_KEY = ""
 CONFIG = None
 SERVER = None
 MSM_CONSOLE = None
-
 
 
 class MSMConsole:
@@ -44,18 +43,19 @@ class MSMConsole:
         self.shared_buffer = Queue()
         self.max_lines = max_lines
         self.line_dict = collections.OrderedDict()
-        self.line_times = collections.deque(maxlen=max_lines)
+        # self.line_times = collections.deque(maxlen=max_lines)
+        self.line_time_heap = MappedQueue()
         self.lines = collections.deque(maxlen=max_lines)
         self.ansi_escape_8bit = re.compile(
             br'(?:\x1B[@-Z\\-_]|[\x80-\x9A\x9C-\x9F]|(?:\x1B\[|\x9B)[0-?]*[ -/]*[@-~])'
         )
 
-    def remove_control_characters(self, bytes):
+    def _remove_control_characters(self, bytes):
         bytes = self.ansi_escape_8bit.sub(b'', bytes)
         str = bytes.decode("utf-8")
         return "".join(ch for ch in str if unicodedata.category(ch)[0] != "C")
 
-    def copy_from_buffer(self):
+    def _copy_from_buffer(self):
         logging.debug("[MSMConsole] - copy_from_buffer()")
         copy = True
         while copy:
@@ -63,22 +63,21 @@ class MSMConsole:
                 line = self.shared_buffer.get_nowait()
                 if line is not Empty:
                     # If we're at the max lines, pop the earliest one off
-                    if len(self.line_times) == self.max_lines:
+                    if len(self.line_time_heap) == self.max_lines:
                         logging.debug("Popping earliest stored line")
-                        dt = self.line_times.popleft()
+                        dt = self.line_time_heap.pop()
                         self.line_dict.pop(dt)
 
                     # Fix up the line and add it to the tracking
-                    line = self.remove_control_characters(line)
+                    line = self._remove_control_characters(line)
                     dt = datetime.utcnow()
-                    self.line_times.append(dt)
+                    self.line_time_heap.push(dt)
                     self.line_dict[dt] = line
 
             except Empty:
                 copy = False
 
-    def get_output(self):
-        logging.debug("[MSMConsole] - get_output()")
+    def _reopen_if_needed(self):
         if self.process is None or self.process.poll() is not None:
             try:
                 logging.debug("Reopening console...")
@@ -86,15 +85,33 @@ class MSMConsole:
             except Exception as e:
                 logging.exception("Could not open console process", e)
                 self.lines.append(f"<ERR> Could not open console process: {e}")
-        self.copy_from_buffer()
-        return list(self.line_dict.values())
+
+    def get_output(self, from_datetime=None):
+        logging.debug("[MSMConsole] - get_output()")
+
+        # Reopen console if needed and open from the buffer
+        self._reopen_if_needed()
+        self._copy_from_buffer()
+
+        # Grab all lines from the given datetime onward
+        if from_datetime is None:
+            from_datetime = datetime.min
+        max = len(self.line_time_heap)
+        values = []
+        i = self.line_time_heap.binary_search(from_datetime)
+        while i < max:
+            dt = self.line_time_heap.h[i]
+            values.append(self.line_dict[dt])
+            i += 1
+
+        return values
 
     def open_console(self):
         logging.debug("[MSMConsole] - open_console()")
         command = ["msm", self.server, "console"]
         logging.info(f"Starting up MSM console with command {command}")
 
-        _, self.process = run_command(command, blocking=False)
+        _, self.process = MSMWrapperServer.run_command(command, blocking=False)
         t = Thread(target=MSMConsole.enqueue_output, args=(self.process.stdout, self.shared_buffer))
         t.daemon = True
         t.start()
@@ -104,6 +121,217 @@ class MSMConsole:
         logging.info("Detaching from screen session.")
         if self.process is not None and self.process.stdin:
             self.process.stdin.write([0x21, 0x24])  # Detach from screen session setup by MSM
+
+
+class MSMWrapperServer(SimpleHTTPRequestHandler):
+    """ Main class to present webpages and authentication. """
+    def __init__(self, request, client_address, server):
+        with open(CONFIG["main-template"]) as file:
+            self.template = file.read()
+        with open(CONFIG["admin-template"]) as file:
+            self.admin_template = file.read()
+        SimpleHTTPRequestHandler.__init__(self, request, client_address, server)
+
+    @staticmethod
+    def error_bytes(title, error):
+        return bytes(f"<html><head><h1>{title}</h1></head><body>{error}</h1></body></h1ml>", "utf-8")
+
+    @staticmethod
+    def bind_template_values(contents: str):
+        online, server = MSMWrapperServer.get_server_info()
+        status = MSMWrapperServer.get_server_status((online, server))
+
+        players = server.players.online if online and server.accepting_connections else 0
+        max_players = server.players.max if online and server.accepting_connections else 0
+
+        domain_status = "NO_SYNC"
+        values = contents.replace("{{IP}}", IP).replace("{{DOMAIN}}", CONFIG["domain"])
+        values = values.replace("{{STATUS}}", status).replace("{{DOMAIN_STATUS}}", domain_status)
+        values = values.replace("{{PLAYERS}}", str(players)).replace("{{MAX_PLAYERS}}", str(max_players))
+        return values
+
+    @staticmethod
+    def get_server_info() -> Tuple[bool, Union[server_pinger.Server, None]]:
+        result, _ = MSMWrapperServer.run_command(["msm", SERVER, "status"])
+        # if not result:  # MSM not running
+        #    return (False, None)
+        if result is None or "is running" not in result:  # MSM says it's down
+            return False, None
+
+        # MSM says the server is running so grab the info from the pinger.
+        # note: The server may refuse the connection when initializing. This is flagged in the returned object
+        return True, server_pinger.ping("127.0.0.1")
+
+    @staticmethod
+    def get_server_status(info: Tuple[bool, Union[server_pinger.Server, None]]) -> str:
+        online, server = info
+        if not online:
+            return "offline"
+        if online and server.accepting_connections:
+            return "online"
+        else:
+            return "initializing"
+
+    @staticmethod
+    def run_command(command_args, blocking=True) -> Tuple[str, Union[None, subprocess.Popen]]:
+        try:
+            if blocking:
+                process = subprocess.Popen(command_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                (output, err) = process.communicate()
+                process.wait()
+                return output.decode("utf-8"), process
+            else:
+                process = subprocess.Popen(command_args,
+                                           stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT,
+                                           start_new_session=True)
+                return "", process
+        except Exception:
+            logging.exception(f"Could not execute command {command_args}!")
+            return "", None
+
+
+    """"""""""""""""""""""""""""""
+    """    REQUEST HANDLING    """
+    """"""""""""""""""""""""""""""
+    def do_HEAD(self, content_type='text/html'):
+        self.send_response(200)
+        self.send_header('Content-type', content_type)
+        self.end_headers()
+
+    def do_AUTHHEAD(self):
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm=\Administration\"')
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+
+    def get_API(self, path: str, resource: dict):
+        logging.debug(f"API Request for {resource} under {path}")
+        self.do_HEAD('application/json')
+        if path in self.api_routes:
+            print("Serving up API result")
+            contents = self.api_routes[path](self, resource)  # noqa
+            if isinstance(contents, str):
+                contents = {"value": contents}
+            if contents is not None:
+                self.wfile.write(bytes(json.dumps(contents), 'utf-8'))
+            else:
+                logging.warning(f"Got empty API response for {path}")
+        self.end_headers()
+
+    def do_GET(self):
+        path = self.path
+        path = path[:-1] if path.endswith("/") else path
+        result = urlparse(path)
+        resource = {
+            "path": result.path,
+            "params": result.params,
+            "query": parse_qs(result.query),
+            "fragment": result.fragment
+        }
+        logging.info(f"Request: {result}")
+
+        if path.startswith("/admin"):
+            path = path[len("/admin"):]
+            if self.headers.get('Authorization') is None or self.headers.get('Authorization') != f'Basic {AUTH_KEY}':
+                self.do_AUTHHEAD()
+                self.wfile.write(self.error_bytes("Forbidden", "Not authorized"))
+            else:
+                if path.startswith("/api"):
+                    self.get_API(path[len("/api"):], resource)
+                else:
+                    # Only serve the template
+                    self.do_HEAD()
+                    page = self.bind_template_values(self.admin_template)
+                    self.wfile.write(bytes(page, "utf-8"))
+        elif path.startswith("/api"):
+            self.get_API(self.path[4:], resource)
+        else:
+            if path in CONFIG["permitted-resources"]:
+                super().do_GET()
+            else:
+                self.do_HEAD()
+                page = self.bind_template_values(self.template)
+                self.wfile.write(bytes(page, "utf-8"))
+
+    def do_POST(self):
+        # No posting allowed
+        self.send_response(403)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(self.error_bytes("Not Allowed", "Request type not allowed."))
+
+
+    """"""""""""""""""""""""""""""
+    """     API HANDLING      """
+    """"""""""""""""""""""""""""""
+    def check_api_auth(self):
+        if self.headers.get('Authorization') is None or self.headers.get('Authorization') != f'Basic {AUTH_KEY}':
+            value = {"error": "Forbidden"}
+            self.wfile.write(bytes(json.dumps(value), 'utf-8'))
+            return False
+        return True
+
+    def get_status(self, _):
+        online, server = self.get_server_info()
+        return self.get_server_status((online, server))
+
+    def get_players(self, _):
+        online, server = self.get_server_info()
+        result = {"online": 0, "max": 0}
+        if online:
+            result = {"online": server.players.online,
+                      "max": server.players.max}
+        return result
+
+    def get_ip(self, _):
+        return IP
+
+    def get_console(self, resource):
+        if not self.check_api_auth():
+            return
+        query = resource["query"]
+
+        dt = datetime.min
+        if "since_utc_ts" in query:
+            try:
+                timestamp = int(query["since_utc_ts"])
+                dt = datetime.utcfromtimestamp(timestamp)
+            except:
+                logging.info(f"Invalid query given to get_console(): {query}")
+        return {"output": MSM_CONSOLE.get_output(dt)}
+
+    def start_server(self, _):
+        if not self.check_api_auth():
+            return
+        self.run_command(["msm", SERVER, "start"], blocking=False)
+        return "success"
+
+    def stop_server(self, _):
+        if not self.check_api_auth():
+            return
+        self.run_command(["msm", SERVER, "stop"], blocking=False)
+        return "success"
+
+    def restart_server(self, _):
+        if not self.check_api_auth():
+            return
+        self.run_command(["msm", SERVER, "restart"], blocking=False)
+        return "success"
+
+    # API Routing
+    api_routes = {"/status": get_status,
+                  "/players": get_players,
+                  "/ip": get_ip,
+                  "/console": get_console,
+                  "/start": start_server,
+                  "/restart": restart_server,
+                  "/stop": stop_server}
+
+
+class AddressReuseServer(socketserver.TCPServer):
+    allow_reuse_address = True
 
 
 def read_config(path="config.txt"):
@@ -140,194 +368,11 @@ def read_config(path="config.txt"):
     return config
 
 
-def get_server_info() -> Tuple[bool, Union[server_pinger.Server, None]]:
-    result, _ = run_command(["msm", SERVER, "status"])
-    # if not result:  # MSM not running
-    #    return (False, None)
-    if result is None or "is running" not in result:  # MSM says it's down
-        return False, None
-
-    # MSM says the server is running so grab the info from the pinger.
-    # note: The server may refuse the connection when initializing. This is flagged in the returned object
-    return True, server_pinger.ping("127.0.0.1")
-
-
-def get_server_status(info: Tuple[bool, Union[server_pinger.Server, None]]) -> str:
-    online, server = info
-    if not online:
-        return "offline"
-    if online and server.accepting_connections:
-        return "online"
-    else:
-        return "initializing"
-
-
-def run_command(command_args, blocking=True) -> Tuple[str, Union[None, subprocess.Popen]]:
-    try:
-        if blocking:
-            process = subprocess.Popen(command_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            (output, err) = process.communicate()
-            process.wait()
-            return output.decode("utf-8"), process
-        else:
-            process = subprocess.Popen(command_args,
-                                       stdin=subprocess.PIPE,
-                                       stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT,
-                                       start_new_session=True)
-            return "", process
-    except Exception:
-        logging.exception(f"Could not execute command {command_args}!")
-        return "", None
-
-
-class AuthHandler(SimpleHTTPRequestHandler):
-    """ Main class to present webpages and authentication. """
-
-    @staticmethod
-    def error_bytes(title, error):
-        return bytes(f"<html><head><h1>{title}</h1></head><body>{error}</h1></body></h1ml>", "utf-8")
-
-    @staticmethod
-    def bind_template_values():
-        online, server = get_server_info()
-        status = get_server_status((online, server))
-
-        players = server.players.online if online and server.accepting_connections else 0
-        max_players = server.players.max if online and server.accepting_connections else 0
-
-        domain_status = "NO_SYNC"
-        values = template.replace("{{IP}}", IP).replace("{{DOMAIN}}", CONFIG["domain"])
-        values = values.replace("{{STATUS}}", status).replace("{{DOMAIN_STATUS}}", domain_status)
-        values = values.replace("{{PLAYERS}}", str(players)).replace("{{MAX_PLAYERS}}", str(max_players))
-        return values
-
-    def do_HEAD(self, content_type='text/html'):
-        self.send_response(200)
-        self.send_header('Content-type', content_type)
-        self.end_headers()
-
-    def do_AUTHHEAD(self):
-        self.send_response(401)
-        self.send_header('WWW-Authenticate', 'Basic realm=\Administration\"')
-        self.send_header('Content-type', 'text/html')
-        self.end_headers()
-
-    def get_API(self, args):
-        logging.debug(f"API Request for {args}")
-        self.do_HEAD('application/json')
-        if args in self.api_routes:
-            contents = self.api_routes[args](self)  # noqa
-            if isinstance(contents, str):
-                contents = {"value": contents}
-            elif contents is not None:
-                self.wfile.write(bytes(json.dumps(contents), 'utf-8'))
-        self.end_headers()
-
-    def do_GET(self):
-        """ Present frontpage with user authentication. """
-        logging.info(self.path)
-        path = self.path
-        path = path[:-1] if path.endswith("/") else path
-
-        if path.startswith("/admin"):
-            path = path[len("/admin"):]
-            if self.headers.get('Authorization') is None or self.headers.get('Authorization') != f'Basic {AUTH_KEY}':
-                self.do_AUTHHEAD()
-                self.wfile.write(self.error_bytes("Forbidden", "Not authorized"))
-            else:
-                if path.startswith("/api"):
-                    self.get_API(path[len("/api"):])
-                else:
-                    # Only serve the template
-                    self.do_HEAD()
-                    self.wfile.write(bytes("<html><head><h1>Admin Area</h1></head></html>", "utf-8"))
-        elif path.startswith("/api"):
-            self.get_API(self.path[4:])
-        else:
-            if path in CONFIG["permitted-resources"]:
-                super().do_GET()
-            else:
-                self.do_HEAD()
-                page = self.bind_template_values()
-                self.wfile.write(bytes(page, "utf-8"))
-
-    def do_POST(self):
-        # No posting allowed
-        self.send_response(403)
-        self.send_header('Content-type', 'text/html')
-        self.end_headers()
-        self.wfile.write(self.error_bytes("Not Allowed", "Request type not allowed."))
-
-    """"""""""""""""""""""""""""""
-    """     API HANDLING      """
-    """"""""""""""""""""""""""""""
-
-    def check_api_auth(self):
-        if self.headers.get('Authorization') is None or self.headers.get('Authorization') != f'Basic {AUTH_KEY}':
-            value = {"error": "Forbidden"}
-            self.wfile.write(bytes(json.dumps(value), 'utf-8'))
-            return False
-        return True
-
-    def get_status(self):
-        online, server = get_server_info()
-        return get_server_status((online, server))
-
-    def get_players(self):
-        online, server = get_server_info()
-        result = {"online": 0, "max": 0}
-        if online:
-            result = {"online": server.players.online,
-                      "max": server.players.max}
-        return result
-
-    def get_ip(self):
-        return IP
-
-    def get_console(self):
-        if not self.check_api_auth():
-            return
-        return {"output": MSM_CONSOLE.get_output()}
-
-    def start_server(self):
-        if not self.check_api_auth():
-            return
-        run_command(["msm", SERVER, "start"], blocking=False)
-        return "success"
-
-    def stop_server(self):
-        if not self.check_api_auth():
-            return "success"
-        run_command(["msm", SERVER, "stop"], blocking=False)
-
-    def restart_server(self):
-        if not self.check_api_auth():
-            return
-        run_command(["msm", SERVER, "restart"], blocking=False)
-        return "success"
-
-    # API Routing
-    api_routes = {"/status": get_status,
-                  "/players": get_players,
-                  "/ip": get_ip,
-                  "/console": get_console,
-                  "/start": start_server,
-                  "/restart": restart_server,
-                  "/stop": stop_server}
-
-
-class AddressReuseServer(socketserver.TCPServer):
-    allow_reuse_address = True
-
-
 if __name__ == "__main__":
     if "-v" in sys.argv or "--verbose" in sys.argv:
         logging.getLogger().setLevel(logging.DEBUG)
     logging.info("Reading config and template files")
     config = read_config()
-    with open(config["main-template"]) as file:
-        template = file.read()
 
     logging.info("Done!")
     print_config = dict(config)
@@ -342,7 +387,7 @@ if __name__ == "__main__":
     MSM_CONSOLE = MSMConsole(SERVER)
 
     # Set up socket server
-    with AddressReuseServer(("", int(config["port"])), AuthHandler) as httpd:
+    with AddressReuseServer(("", int(config["port"])), MSMWrapperServer) as httpd:
         print(f"Serving requests at port {int(config['port'])}")
         print(f"MSM Server: {SERVER}")
         try:
