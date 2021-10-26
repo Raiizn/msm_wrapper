@@ -18,7 +18,7 @@ import socketserver
 from typing import Tuple, Union
 import unicodedata
 from lib import server_pinger
-from threading import Thread
+from threading import Thread, Lock
 from queue import Queue, Empty
 from lib.mapped_queue import MappedQueue
 
@@ -124,6 +124,8 @@ class MSMConsole:
 
 
 class MSMWrapperServer(SimpleHTTPRequestHandler):
+    info_mutex = Lock()
+
     """ Main class to present webpages and authentication. """
     def __init__(self, request, client_address, server):
         with open(CONFIG["main-template"]) as file:
@@ -153,14 +155,17 @@ class MSMWrapperServer(SimpleHTTPRequestHandler):
     @staticmethod
     def get_server_info() -> Tuple[bool, Union[server_pinger.Server, None]]:
         result, _ = MSMWrapperServer.run_command(["msm", SERVER, "status"])
-        # if not result:  # MSM not running
-        #    return (False, None)
         if result is None or "is running" not in result:  # MSM says it's down
             return False, None
 
         # MSM says the server is running so grab the info from the pinger.
         # note: The server may refuse the connection when initializing. This is flagged in the returned object
-        return True, server_pinger.ping("127.0.0.1")
+        MSMWrapperServer.info_mutex.acquire()
+        try:
+            ping_result = server_pinger.ping("127.0.0.1")
+        finally:
+            MSMWrapperServer.info_mutex.release()
+        return True, ping_result
 
     @staticmethod
     def get_server_status(info: Tuple[bool, Union[server_pinger.Server, None]]) -> str:
@@ -244,6 +249,7 @@ class MSMWrapperServer(SimpleHTTPRequestHandler):
                     # Only serve the template
                     self.do_HEAD()
                     page = self.bind_template_values(self.admin_template)
+                    # page = self.admin_template
                     self.wfile.write(bytes(page, "utf-8"))
         elif path.startswith("/api"):
             self.get_API(self.path[4:], resource)

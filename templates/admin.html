@@ -19,187 +19,287 @@
 
   <!-- CSS
   –––––––––––––––––––––––––––––––––––––––––––––––––– -->
-  <link rel="stylesheet" href="templates/normalize.css">
-  <link rel="stylesheet" href="templates/skeleton.css">
+  <link rel="stylesheet" href="/templates/normalize.css">
+  <link rel="stylesheet" href="/templates/skeleton.css">
   <link rel="stylesheet" href="normalize.css">
   <link rel="stylesheet" href="skeleton.css">
   <!-- Favicon
   –––––––––––––––––––––––––––––––––––––––––––––––––– -->
   <link rel="icon" type="image/png" href="images/favicon.png">
-	<style type='text/css'>
-	/* Tooltip container */
-	.tooltip {
-		position: relative;
-		display: inline-block;
-		border-bottom: 1px dotted black; /* If you want dots under the hoverable text */
-	}
+  <style type='text/css'>
 
-	/* Tooltip text */
-	.tooltip .tooltiptext {
-		visibility: hidden;
-		background-color: black;
-		color: #fff;
-		width: 300px;
-		text-align: center;
-		padding: 5px 0;
-		border-radius: 6px;
-	  bottom: 100%;
-		left: 50%;
-		margin-left: -150px;
-		position: absolute;
-		padding: 2px;
-		z-index: 1;
-	}
+  /* Tooltip container */
+  .tooltip {
+    position: relative;
+    display: inline-block;
+    border-bottom: 1px dotted black; /* If you want dots under the hoverable text */
+  }
 
-	/* Show the tooltip text when you mouse over the tooltip container */
-	.tooltip:hover .tooltiptext {
-		visibility: visible;
-	}
+  /* Tooltip text */
+  .tooltip .tooltiptext {
+    visibility: hidden;
+    background-color: black;
+    color: #fff;
+    width: 300px;
+    text-align: center;
+    padding: 5px 0;
+    border-radius: 6px;
+    bottom: 100%;
+    left: 50%;
+    margin-left: -150px;
+    position: absolute;
+    padding: 2px;
+    z-index: 1;
+  }
 
-	button disabled{
-	    background-color: gray !important;
+  /* Show the tooltip text when you mouse over the tooltip container */
+  .tooltip:hover .tooltiptext {
+    visibility: visible;
+  }
+
+  .disabled {
+    background-color: #999 !important;
+    color: #eee !important;
+    border-color: #999 !important;
+  }
+  
+
+  
+
+  #console{
+    border: 1px solid gray;
+    padding: 8px;
+    width: 80%;
+    height: 400px;
+    overflow-y: scroll;
+  }
+    
+  #console_overlay{
+    text-align: center;
+    background-color: #efefef;
+    width: calc(100% + 16px);
+    height: calc(100% + 16px);
+    margin: -8px;
+  }
+  
+  #console_button{
+    margin:auto !important;
+    position: relative;
+    top: 50%;
+  }
+  
+  .console_output{
+    font-family: monospace;
+    size: 16px;
+  }
+
+
+
+  #alert_container{
+    min-height: 28px;
+    padding: 12px;
+    border-radius: 1em;
+    font-size: 18px;
+    margin-top: 1em;
+
+  }
+  
+  .alert_ok, .alert_error, .alert_warn{
+        animation-name: FadeIn;
+        animation-duration: 1s;
+        transition-timing-function: linear;
     }
-	#console{
-		border: 1px solid gray;
-		padding: 3px;
-		border-radius: 1em;
-		width: 80%;
-		height: 400px;
-	}
-	
-	#alert_container{
-		min-height: 28px;
-		padding: 12px;
-		border-radius: 1em;
-		font-size: 18px;
-		margin-top: 1em;
+  .alert_ok{
+    background-color: #cbffc2;
+    color: green;
+    border: 1px solid green;
+  }
+  .alert_error{
+    background-color: #ffe8e0;
+    color: red;
+    border: 1px solid red;
+  }
+  .alert_warn{
+    background-color:#fffce3;
+    color: orange;
+    border: 1px solid orange;
+  }
 
-	}
-	
-	.alert_ok{
-		background-color: #cbffc2;
-		color: green;
-		border: 1px solid green;
-	}
-	.alert_error{
-		background-color: #ffe8e0;
-		color: red;
-		border: 1px solid red;
-	}
-	.alert_warn{
-		background-color:#fffce3;
-		color: orange;
-		border: 1px solid orange;
-	}
+  </style>
+  
+  <script type="text/javascript">
+    var DOING_REQ = false;
+        function gE(id){
+      return document.getElementById(id);
+    }
 
-	</style>
-	
-	<script type="text/javascript">
-		var DOING_REQ = false;
-		function start_req(){
-			DOING_REQ = true;
-			set_buttons_enabled(false);
-		}
-		
-		function end_req(){
-			DOING_REQ = false;
-			set_buttons_enabled(true);
-		}
-		
-		function gE(id){
-			return document.getElementById(id);
-		}
-		
-		function notify(type, text){
-			var container = gE("alert_container");
-			if(type == "hide"){
-				container.classList.clear();
-				container.innerHTML = "";
-				return;
-			}
-			container.classList.add("alert_"+type);
-			container.innerHTML = text;
-		}
-		
-	  function set_buttons_enabled(enabled){
-			var buttons = ["start", "stop", "restart", "kill", "status"]
-			for(var i = 0; i<buttons.length; i+=1)
-				gE(buttons[i]).enabled = enabled;
-		}
-		
-		function start_server(){
-			if(DOING_REQ)
-				return;
-			start_req();
-			var xhttp = new XMLHttpRequest();
-			xhttp.onload = function(){
-				notify("ok", this.responseText);
-				end_req();
-			}
-			xhttp.open("GET", "/admin/api/start", true);
-			xhttp.send();
-		}
+    function start_req(){
+      DOING_REQ = true;
+      set_buttons_enabled(false);
+    }
+    
+    function end_req(){
+      DOING_REQ = false;
+      set_buttons_enabled(true);
+    }
+    
 
-		function stop_server(){
-		    if(DOING_REQ)
-				return;
-			start_req();
-			var xhttp = new XMLHttpRequest();
-			xhttp.onload = function(){
-				notify("ok", this.responseText);
-				end_req();
-			}
-			xhttp.open("GET", "/admin/api/stop", true);
-			xhttp.send();
-		}
+    function fade_in(element) {
+        var op = 0;  // initial opacity
+        element.style.opacity = 0;
+        element.style.filter = 'alpha(opacity=0)';
+        var timer = setInterval(function () {
+            if (op >= 0.9){
+                clearInterval(timer);
+            }
+            element.style.opacity = op;
+            element.style.filter = 'alpha(opacity=' + op * 100 + ")";
+            op += 0.1;
+        }, 50);
+    }
+    
+    function notify(type, text){
+      var container = gE("alert_container");
+      if(type == "hide"){
+        container.classList.clear();
+        container.innerHTML = "";
+        container.style.opacity = 1;
+        container.style.filter = null;
+        return;
+      }
+      container.classList.add("alert_"+type);
+      container.innerHTML = text;
+      fade_in(container);
+    }
+    
+    function set_buttons_enabled(enabled){
+      var buttons = ["start", "stop", "restart", "kill", "status"]
+      var elem;
+      for(var i = 0; i<buttons.length; i+=1){
+        var elem = gE(buttons[i]);
+        elem.enabled = enabled;
+        if(!enabled)
+          elem.classList.add("disabled");
+        else
+          elem.classList.remove("disabled");
+      }
 
-		function restart_server(){
-		    if(DOING_REQ)
-				return;
-			start_req();
-			var xhttp = new XMLHttpRequest();
-			xhttp.onload = function(){
-				notify("ok", this.responseText);
-				end_req();
-			}
-			xhttp.open("GET", "/admin/api/restart", true);
-			xhttp.send();
-		}
+    }
 
-		function kill_server(){
-		    if(DOING_REQ)
-				return;
-			start_req();
-			var xhttp = new XMLHttpRequest();
-			xhttp.onload = function(){
-				notify("ok", this.responseText);
-				end_req();
-			}
-			xhttp.open("GET", "/admin/api/kill", true);
-			xhttp.send();
-		}
-	</script>
+    function do_request(url, on_success=null){
+      if(DOING_REQ)
+          return;
+          
+      start_req();
+      var xhttp = new XMLHttpRequest();
+      xhttp.open("GET", url, true);
+      xhttp.onreadystatechange = function(oEvent){
+          if(xhttp.readyState === 4){
+              if(xhttp.status === 200){
+                  try {
+                      result = JSON.parse(xhttp.responseText);
+                      if(on_success === null) {
+                        if(result.value == "success")
+                          notify("ok", "Command successfully completed.");
+                        else
+                          notify("warn", "Command did not complete. Result: "+result.value);
+                      }
+                      else{
+                        on_success(result);
+                      }
+                  } catch (e) {
+                      notify("error", "Parse failure: "+e);
+                  }
+              } else {
+                  notify("error", "XHTTP Failure:" +xhttp.statusText);
+              }
+            end_req();
+          }
+      }
+      xhttp.send();
+    }
+
+    function start_server(){
+      do_request("/admin/api/start");
+    }
+
+    function stop_server(){
+        do_request("/admin/api/stop");
+    }
+
+    function restart_server(){
+        do_request("/admin/api/restart");
+    }
+
+    function kill_server(){
+        do_request("/admin/api/kill");
+    }
+    
+    function refresh_status(){
+      do_request("/api/status", function(result){
+        try{
+          gE("status").innerHTML = result.value;
+        }
+        catch(e){
+          notify("warn", "Error reading refresh result: "+e);
+        }
+      });
+    }
+    
+    function set_console_enabled(enabled){
+      if(enabled)
+        gE("console_overlay").style.display = "none";
+      else
+        gE("console_overlay").style.display = "block";
+    }
+    
+    function load_console(){
+      do_request("/admin/api/console", function(result){
+        set_console_enabled(true);
+        try{
+          set_console_lines(lines);
+        }
+        catch(e){
+          notify("warn", "Error reading console lines: "+e);
+        }
+      });
+    }
+    
+    function set_console_lines(lines){
+      var console = gE("console_output");
+      var text = "";
+      for(var i = 0; i<lines.length; i+=1){
+        text += lines[i] + "<br/>"
+      }
+      console.innerHTML += text;
+      console.scrollTop = console.scrollHeight;
+    }
+  </script>
 </head>
 <body>
 
   <!-- Primary Page Layout
   –––––––––––––––––––––––––––––––––––––––––––––––––– -->
   <div class="container">
-		<div id="alert_container"></div>
+    <div id="alert_container"></div>
     <div style="margin-top: 1em;">
         <h4>Server Administration</h4>
-				<p>Server administration page for {{msm-server}}.</p>
-				<p>Status: {{STATUS}} &nbsp; &nbsp; <button id="status">Refresh</button></p>
-				<button id="start" class="button-primary" onclick="start_server()">Start Server</button>
-				<button id="stop" class="button-primary" onclick="stop_server()">Stop Server</button>
-				<button id="restart" class="button-primary" onclick="restart_server()">Restart Server</button>
-				<button id="kill" class="button-primary tooltip" onclick="kill_server()">Kill
-					<span class="tooltiptext">This should be a last resort!</span>
-				</button>
-				<hr/>
-				<h5>Console</h5>
-				<div id="console"></div>
-
+        <p>Server administration page for {{msm-server}}.</p>
+        <p>Status: <span id="status">{{STATUS}}</span> &nbsp; &nbsp; <button id="status" onclick="refresh_status()">Refresh</button></p>
+        <h5>Console</h5>
+        <div id="console">
+          <div id="console_overlay">
+            <button id="console_button" class="button-primary" onclick="load_console()">Connect</button>
+          </div>
+          <span id="console_output" class="console_output"></span>
+        </div>
+        <hr/>
+        <button id="start" class="button-primary" onclick="start_server()">Start Server</button>
+        <button id="stop" class="button-primary" onclick="stop_server()">Stop Server</button>
+        <button id="restart" class="button-primary" onclick="restart_server()">Restart Server</button>
+        <button id="kill" class="button-primary tooltip" onclick="kill_server()">Kill
+          <span class="tooltiptext">This should be a last resort!</span>
+        </button>
     </div>
   </div>
 
