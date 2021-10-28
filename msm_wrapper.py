@@ -9,6 +9,7 @@ import logging
 import re
 import sys
 import urllib.request
+from urllib import parse
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, BaseHTTPRequestHandler
@@ -18,6 +19,7 @@ import socketserver
 from typing import Tuple, Union
 import unicodedata
 from lib import server_pinger
+from lib.ansi2html import ansi2html
 from threading import Thread, Lock
 from queue import Queue, Empty
 from lib.mapped_queue import MappedQueue
@@ -69,7 +71,7 @@ class MSMConsole:
                         self.line_dict.pop(dt)
 
                     # Fix up the line and add it to the tracking
-                    line = self._remove_control_characters(line)
+                    line = ansi2html(line.decode("utf-8"))
                     dt = datetime.utcnow()
                     self.line_time_heap.push(dt)
                     self.line_dict[dt] = line
@@ -101,7 +103,8 @@ class MSMConsole:
         i = self.line_time_heap.binary_search(from_datetime)
         while i < max:
             dt = self.line_time_heap.h[i]
-            values.append(self.line_dict[dt])
+            if dt > from_datetime:
+                values.append(self.line_dict[dt])
             i += 1
 
         return values
@@ -120,7 +123,8 @@ class MSMConsole:
         logging.debug("[MSMConsole] - close()")
         logging.info("Detaching from screen session.")
         if self.process is not None and self.process.stdin:
-            self.process.stdin.write([0x21, 0x24])  # Detach from screen session setup by MSM
+            self.process.stdin.write(bytearray([0x21, 0x24]))  # Detach from screen session setup by MSM
+            self.process = None
 
 
 class MSMWrapperServer(SimpleHTTPRequestHandler):
@@ -228,13 +232,13 @@ class MSMWrapperServer(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = self.path
         path = path[:-1] if path.endswith("/") else path
-        result = urlparse(path)
+        result = parse.urlsplit(path)
         resource = {
             "path": result.path,
-            "params": result.params,
             "query": parse_qs(result.query),
             "fragment": result.fragment
         }
+        path = result.path
         logging.info(f"Request: {result}")
 
         if path.startswith("/admin"):
@@ -302,11 +306,15 @@ class MSMWrapperServer(SimpleHTTPRequestHandler):
         dt = datetime.min
         if "since_utc_ts" in query:
             try:
-                timestamp = int(query["since_utc_ts"])
+                timestamp = int(query["since_utc_ts"][0])
                 dt = datetime.utcfromtimestamp(timestamp)
             except:
                 logging.info(f"Invalid query given to get_console(): {query}")
         return {"output": MSM_CONSOLE.get_output(dt)}
+
+    def disconnect_console(self, _):
+        MSM_CONSOLE.close()
+        return "ok"
 
     def start_server(self, _):
         if not self.check_api_auth():
@@ -331,6 +339,7 @@ class MSMWrapperServer(SimpleHTTPRequestHandler):
                   "/players": get_players,
                   "/ip": get_ip,
                   "/console": get_console,
+                  "/disconnect_console": disconnect_console,
                   "/start": start_server,
                   "/restart": restart_server,
                   "/stop": stop_server}

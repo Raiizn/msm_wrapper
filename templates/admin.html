@@ -28,7 +28,10 @@
   <link rel="icon" type="image/png" href="images/favicon.png">
   <style type='text/css'>
 
-  /* Tooltip container */
+	.hover:hover{
+		cursor: pointer;
+	}
+
   .tooltip {
     position: relative;
     display: inline-block;
@@ -63,23 +66,22 @@
     border-color: #999 !important;
   }
   
-
-  
-
   #console{
     border: 1px solid gray;
     padding: 8px;
-    width: 80%;
+    width: 90%;
     height: 400px;
+    background: #262626;
     overflow-y: scroll;
+    resize: both;
   }
     
   #console_overlay{
     text-align: center;
-    background-color: #efefef;
-    width: calc(100% + 16px);
-    height: calc(100% + 16px);
-    margin: -8px;
+    background-color: #262626;
+    width: 100%;
+    height: 100%;
+    margin-top: -32px;
   }
   
   #console_button{
@@ -90,25 +92,27 @@
   
   .console_output{
     font-family: monospace;
-    size: 16px;
+    font-size: 16px;
+    color: white;
   }
 
 
 
   #alert_container{
-    min-height: 28px;
     padding: 12px;
     border-radius: 1em;
-    font-size: 18px;
-    margin-top: 1em;
+    font-size: 16px;
+    font-family: monospace;
+    position: fixed;
+    width: 70%;
+    margin-left: 15%;
+    z-index: 1;
+    bottom: 8px;
+    opacity: 0;
+    filter=alpha(opacity=0);
 
   }
-  
-  .alert_ok, .alert_error, .alert_warn{
-        animation-name: FadeIn;
-        animation-duration: 1s;
-        transition-timing-function: linear;
-    }
+
   .alert_ok{
     background-color: #cbffc2;
     color: green;
@@ -128,12 +132,16 @@
   </style>
   
   <script type="text/javascript">
+    var BUTTONS = ["start", "stop", "restart", "console_button", "status_button", "disconnect"]
     var DOING_REQ = false;
-        function gE(id){
+    var LAST_CONSOLE_DATE = new Date();
+    var CONSOLE_ENABLED = false;
+
+    function gE(id){
       return document.getElementById(id);
     }
 
-    function start_req(){
+    function start_req(toggle_buttons=true){
       DOING_REQ = true;
       set_buttons_enabled(false);
     }
@@ -155,42 +163,45 @@
             element.style.opacity = op;
             element.style.filter = 'alpha(opacity=' + op * 100 + ")";
             op += 0.1;
-        }, 50);
+        }, 20);
     }
     
     function notify(type, text){
       var container = gE("alert_container");
+      var content = gE("alert");
       if(type == "hide"){
-        container.classList.clear();
-        container.innerHTML = "";
-        container.style.opacity = 1;
+        container.classList.length=0;
+        container.style.opacity = 0;
         container.style.filter = null;
+        content.innerHTML = "";
+
         return;
       }
       container.classList.add("alert_"+type);
-      container.innerHTML = text;
+      content.innerHTML = text;
       fade_in(container);
     }
     
     function set_buttons_enabled(enabled){
-      var buttons = ["start", "stop", "restart", "kill", "status"]
       var elem;
-      for(var i = 0; i<buttons.length; i+=1){
-        var elem = gE(buttons[i]);
-        elem.enabled = enabled;
-        if(!enabled)
-          elem.classList.add("disabled");
-        else
-          elem.classList.remove("disabled");
+      for(var i = 0; i<BUTTONS.length; i+=1){
+        var elem = gE(BUTTONS[i]);
+        if(elem!==null){
+          elem.enabled = enabled;
+          if(!enabled)
+            elem.classList.add("disabled");
+          else
+            elem.classList.remove("disabled");
+        }
       }
 
     }
 
-    function do_request(url, on_success=null){
+    function do_request(url, on_success=null, toggle_buttons=true){
       if(DOING_REQ)
           return;
-          
-      start_req();
+      if(toggle_buttons)
+        start_req();
       var xhttp = new XMLHttpRequest();
       xhttp.open("GET", url, true);
       xhttp.onreadystatechange = function(oEvent){
@@ -199,8 +210,8 @@
                   try {
                       result = JSON.parse(xhttp.responseText);
                       if(on_success === null) {
-                        if(result.value == "success")
-                          notify("ok", "Command successfully completed.");
+                        if(result.value == "success" || result.value == "ok")
+                          notify("ok", "Command sent!");
                         else
                           notify("warn", "Command did not complete. Result: "+result.value);
                       }
@@ -213,7 +224,8 @@
               } else {
                   notify("error", "XHTTP Failure:" +xhttp.statusText);
               }
-            end_req();
+            if(toggle_buttons)
+                end_req();
           }
       }
       xhttp.send();
@@ -231,10 +243,13 @@
         do_request("/admin/api/restart");
     }
 
-    function kill_server(){
-        do_request("/admin/api/kill");
+    function disconnect_console(){
+        do_request("/admin/api/disconnect_console");
+        set_console_enabled(false);
+        gE("console_output").innerHTML = "";
     }
-    
+
+
     function refresh_status(){
       do_request("/api/status", function(result){
         try{
@@ -251,18 +266,34 @@
         gE("console_overlay").style.display = "none";
       else
         gE("console_overlay").style.display = "block";
+      CONSOLE_ENABLED = enabled;
     }
-    
-    function load_console(){
-      do_request("/admin/api/console", function(result){
-        set_console_enabled(true);
-        try{
-          set_console_lines(lines);
+
+    function load_console(from_time=null){
+      // Do the admin API request
+      var req = "/admin/api/console";
+      if(from_time!==null)
+        req+="?since_utc_ts="+from_time;
+      do_request(req, function(result){
+        if(from_time == null)
+            set_console_enabled(true);
+
+        if(CONSOLE_ENABLED){
+          try
+          {
+            set_console_lines(result["output"]);
+
+            // No from time means we are loading the console for the first time and need to set the interval
+            window.setTimeout(function(){
+                load_console(date_to_unix(LAST_CONSOLE_DATE));
+            }, 2500);
+            LAST_CONSOLE_DATE = new Date();
+          }
+          catch(e){
+            notify("warn", "Error reading console lines: "+e);
+          }
         }
-        catch(e){
-          notify("warn", "Error reading console lines: "+e);
-        }
-      });
+      }, false);
     }
     
     function set_console_lines(lines){
@@ -271,37 +302,48 @@
       for(var i = 0; i<lines.length; i+=1){
         text += lines[i] + "<br/>"
       }
-      console.innerHTML += text;
-      console.scrollTop = console.scrollHeight;
+      if(lines.length>0){
+        console.innerHTML += text;
+        gE("console_bottom").scrollIntoView();
+      }
     }
+	
+	function date_to_unix(date){
+		return (date/1000).toFixed(0);
+	}
+
   </script>
 </head>
-<body>
+<body style='background-color: #efefef;'>
 
   <!-- Primary Page Layout
   –––––––––––––––––––––––––––––––––––––––––––––––––– -->
-  <div class="container">
-    <div id="alert_container"></div>
-    <div style="margin-top: 1em;">
+  <div id="alert_container">
+  <div style='float:left;' id="alert"></div>
+  <div class='hover' style='float:right; font-weight: bold;' onclick="notify('hide', '')">X</div>
+  </div>
+
+  <div class="container" style="margin-top: 2em; margin-bottom:3em; background-color: white; border-radius:2em; padding:2em">
+    <div >
         <h4>Server Administration</h4>
-        <p>Server administration page for {{msm-server}}.</p>
-        <p>Status: <span id="status">{{STATUS}}</span> &nbsp; &nbsp; <button id="status" onclick="refresh_status()">Refresh</button></p>
+        Status: <span id="status">{{STATUS}}</span> &nbsp; &nbsp; <button id="status_button" onclick="refresh_status()">Refresh</button>
         <h5>Console</h5>
-        <div id="console">
+        <div id="console" style='margin:auto;'>
           <div id="console_overlay">
             <button id="console_button" class="button-primary" onclick="load_console()">Connect</button>
           </div>
           <span id="console_output" class="console_output"></span>
+          <span id="console_bottom"></span>
         </div>
         <hr/>
         <button id="start" class="button-primary" onclick="start_server()">Start Server</button>
         <button id="stop" class="button-primary" onclick="stop_server()">Stop Server</button>
         <button id="restart" class="button-primary" onclick="restart_server()">Restart Server</button>
-        <button id="kill" class="button-primary tooltip" onclick="kill_server()">Kill
-          <span class="tooltiptext">This should be a last resort!</span>
-        </button>
+        <button id="disconnect" class="button-primary" onclick="disconnect_console()">Disconnect Console</button>
+
     </div>
-  </div>
+  </div> 
+
 
 <!-- End Document
   –––––––––––––––––––––––––––––––––––––––––––––––––– -->
